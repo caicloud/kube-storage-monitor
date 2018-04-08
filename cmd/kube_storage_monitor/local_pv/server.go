@@ -19,8 +19,8 @@ package local_pv
 import (
 	"os"
 
-	"github.com/golang/glog"
 	lvmonitor "github.com/caicloud/kube-storage-monitor/pkg/local_pv_monitor"
+	"github.com/golang/glog"
 	"github.com/kubernetes-incubator/external-storage/local-volume/provisioner/pkg/common"
 
 	"k8s.io/api/core/v1"
@@ -65,7 +65,7 @@ func RunLocalPVMonitor() {
 		Node:            node,
 		DiscoveryMap:    provisionerConfig.StorageClassConfig,
 		NodeLabelsForPV: provisionerConfig.NodeLabelsForPV,
-		UseAlphaAPI: provisionerConfig.UseAlphaAPI,
+		UseAlphaAPI:     provisionerConfig.UseAlphaAPI,
 	}, &monitorConfig).Run(wait.NeverStop)
 }
 
@@ -76,5 +76,3 @@ func getNode(client *kubernetes.Clientset, name string) *v1.Node {
 	}
 	return node
 }
-
-
