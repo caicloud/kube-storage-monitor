@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: local-monitor-config 
+  namespace: default 
+data:
+  storageClassMap: |     
+    fast-disks:
+       hostDir: /mnt/disks/vol
+       mountDir:  /mnt/disks/vol 

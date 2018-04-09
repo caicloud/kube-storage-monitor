@@ -1,0 +1,49 @@
+apiVersion: extensions/v1beta1
+kind: DaemonSet
+metadata:
+  name: local-volume-monitor
+  namespace: default
+  labels:
+    app: local-volume-monitor
+spec:
+  selector:
+    matchLabels:
+      app: local-volume-monitor 
+  template:
+    metadata:
+      labels:
+        app: local-volume-monitor
+    spec:
+      serviceAccountName: local-storage-admin
+      containers:
+        - image: "quay.io/kube_storage_monitor/storage-monitor:latest"
+          imagePullPolicy: "IfNotPresent"
+          name: monitor 
+          securityContext:
+            privileged: true
+          env:
+          - name: MY_NODE_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: spec.nodeName
+          volumeMounts:
+            - mountPath: /etc/monitor/config 
+              name: monitor-config
+            - mountPath: /etc/provisioner/config 
+              name: provisioner-config
+              readOnly: true             
+            - mountPath:  /mnt/disks/vol 
+              name: fast-disks 
+          args:
+            - --kube-storage-types=local_pv
+      volumes:
+        - name: monitor-config
+          configMap:
+            name: local-monitor-config 
+        - name: provisioner-config
+          configMap:
+            name: local-monitor-config 			
+        - name: fast-disks
+          hostPath:
+            path: /mnt/disks/vol 
+
