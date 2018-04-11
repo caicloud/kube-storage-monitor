@@ -208,7 +208,7 @@ func (monitor *LocalPVMonitor) deleteVolume(obj interface{}) {
 
 // Run starts all of this controller's control loops
 func (monitor *LocalPVMonitor) Run(stopCh <-chan struct{}) {
-	glog.Infof("Starting monitor controller %s!", string(monitor.RuntimeConfig.Name))
+	// glog.Infof("Starting local volume monitor %s!", string(monitor.RuntimeConfig.Name))
 	monitor.hasRunLock.Lock()
 	monitor.hasRun = true
 	monitor.hasRunLock.Unlock()
@@ -293,16 +293,12 @@ func (monitor *LocalPVMonitor) checkMountPoint(mountPath string, pv *v1.Persiste
 	for _, mp := range mountPoints {
 		if mp.Path == mountPath {
 			glog.V(10).Infof("mountPath is still a mount point: %s", mountPath)
-			err := monitor.markOrUnmarkPV(pv, NotMountPoint, "yes", false)
-			if err != nil {
-				glog.Errorf("mark PV: %s failed, err: %v", pv.Name, err)
-			}
 			return true
 		}
 	}
 
 	glog.V(6).Infof("mountPath is not a mount point any more: %s", mountPath)
-	err := monitor.markOrUnmarkPV(pv, NotMountPoint, "yes", true)
+	err := monitor.markPV(pv, NotMountPoint, "yes")
 	if err != nil {
 		glog.Errorf("mark PV: %s failed, err: %v", pv.Name, err)
 	}
@@ -324,7 +320,7 @@ func (monitor *LocalPVMonitor) checkHostDir(pv *v1.PersistentVolume) (mountPath 
 	if len(mountPath) == 0 {
 		// can not find mount path, this may because: admin modify config(hostpath)
 		// mark PV and send a event
-		err = monitor.markOrUnmarkPV(pv, HostPathNotExist, "yes", true)
+		err = monitor.markPV(pv, HostPathNotExist, "yes")
 		if err != nil {
 			glog.Errorf("mark PV: %s failed, err: %v", pv.Name, err)
 		}
@@ -335,18 +331,13 @@ func (monitor *LocalPVMonitor) checkHostDir(pv *v1.PersistentVolume) (mountPath 
 	if !dir && !bl && (dirErr != nil || blErr != nil) {
 		// mountPath does not exist or is not a directory
 		// mark PV and send a event
-		err = monitor.markOrUnmarkPV(pv, HostPathNotExist, "yes", true)
+		err = monitor.markPV(pv, HostPathNotExist, "yes")
 		if err != nil {
 			glog.Errorf("mark PV: %s failed, err: %v", pv.Name, err)
 		}
 		return
 	}
 	continueThisCheck = true
-	// unmark PV if it was marked before
-	err = monitor.markOrUnmarkPV(pv, HostPathNotExist, "yes", false)
-	if err != nil {
-		glog.Errorf("mark PV: %s failed, err: %v", pv.Name, err)
-	}
 	return
 
 }
@@ -362,7 +353,7 @@ func (monitor *LocalPVMonitor) checkPVAndFSSize(mountPath string, pv *v1.Persist
 	storage := pv.Spec.Capacity[v1.ResourceStorage]
 	if util.RoundDownCapacityPretty(capacityByte) < storage.Value() {
 		// mark PV and send a event
-		err = monitor.markOrUnmarkPV(pv, MisMatchedVolSize, "yes", true)
+		err = monitor.markPV(pv, MisMatchedVolSize, "yes")
 		if err != nil {
 			glog.Errorf("mark PV: %s failed, err: %v", pv.Name, err)
 		}
@@ -370,11 +361,6 @@ func (monitor *LocalPVMonitor) checkPVAndFSSize(mountPath string, pv *v1.Persist
 	}
 	// TODO: make sure that PV used bytes is not greater that PV capacity ?
 
-	// unmark PV if it was marked before
-	err = monitor.markOrUnmarkPV(pv, MisMatchedVolSize, "yes", false)
-	if err != nil {
-		glog.Errorf("mark PV: %s failed, err: %v", pv.Name, err)
-	}
 	return
 
 }
@@ -390,7 +376,7 @@ func (monitor *LocalPVMonitor) checkPVAndBlockSize(mountPath string, pv *v1.Pers
 	storage := pv.Spec.Capacity[v1.ResourceStorage]
 	if util.RoundDownCapacityPretty(capacityByte) < storage.Value() {
 		// mark PV and send a event
-		err = monitor.markOrUnmarkPV(pv, MisMatchedVolSize, "yes", true)
+		err = monitor.markPV(pv, MisMatchedVolSize, "yes")
 		if err != nil {
 			glog.Errorf("mark PV: %s failed, err: %v", pv.Name, err)
 		}
@@ -398,17 +384,23 @@ func (monitor *LocalPVMonitor) checkPVAndBlockSize(mountPath string, pv *v1.Pers
 	}
 	// TODO: make sure that PV used bytes is not greater that PV capacity ?
 
-	// unmark PV if it was marked before
-	err = monitor.markOrUnmarkPV(pv, MisMatchedVolSize, "yes", false)
-	if err != nil {
-		glog.Errorf("mark PV: %s failed, err: %v", pv.Name, err)
-	}
 	return
 }
 
 // CheckNodeAffinity looks at the PV node affinity, and checks if the node has the same corresponding labels
 // This ensures that we don't mount a volume that doesn't belong to this node
 func CheckNodeAffinity(pv *v1.PersistentVolume, nodeLabels map[string]string) (bool, error) {
+	fit, err := checkAlphaNodeAffinity(pv, nodeLabels)
+	if err != nil {
+		return false, err
+	}
+	if fit {
+		return true, nil
+	}
+	return checkVolumeNodeAffinity(pv, nodeLabels)
+}
+
+func checkAlphaNodeAffinity(pv *v1.PersistentVolume, nodeLabels map[string]string) (bool, error) {
 	affinity, err := helper.GetStorageNodeAffinityFromAnnotation(pv.Annotations)
 	if err != nil {
 		return false, fmt.Errorf("error getting storage node affinity: %v", err)
@@ -433,45 +425,45 @@ func CheckNodeAffinity(pv *v1.PersistentVolume, nodeLabels map[string]string) (b
 	return true, nil
 }
 
+func checkVolumeNodeAffinity(pv *v1.PersistentVolume, nodeLabels map[string]string) (bool, error) {
+	if pv.Spec.NodeAffinity == nil {
+		return false, nil
+	}
+
+	if pv.Spec.NodeAffinity.Required != nil {
+		terms := pv.Spec.NodeAffinity.Required.NodeSelectorTerms
+		glog.V(10).Infof("Match for Required node selector terms %+v", terms)
+		for _, term := range terms {
+			selector, err := helper.NodeSelectorRequirementsAsSelector(term.MatchExpressions)
+			if err != nil {
+				return false, fmt.Errorf("failed to parse MatchExpressions: %v", err)
+			}
+			if !selector.Matches(labels.Set(nodeLabels)) {
+				return false, fmt.Errorf("NodeSelectorTerm %+v does not match node labels", term.MatchExpressions)
+			}
+		}
+	}
+	return true, nil
+}
+
 // markPV marks PV by adding annotation
-func (monitor *LocalPVMonitor) markOrUnmarkPV(pv *v1.PersistentVolume, ann, value string, mark bool) error {
+func (monitor *LocalPVMonitor) markPV(pv *v1.PersistentVolume, ann, value string) error {
 	// The volume from method args can be pointing to watcher cache. We must not
 	// modify these, therefore create a copy.
 	volumeClone := pv.DeepCopy()
 	var eventMes string
 
-	if mark {
-		// mark PV
-		_, ok := volumeClone.ObjectMeta.Annotations[ann]
-		if ok {
-			glog.V(10).Infof("PV: %s is already marked with ann: %s", volumeClone.Name, ann)
-			return nil
-		}
-		metav1.SetMetaDataAnnotation(&volumeClone.ObjectMeta, ann, value)
-		_, ok = volumeClone.ObjectMeta.Annotations[FirstMarkTime]
-		if !ok {
-			firstMarkTime := time.Now()
-			metav1.SetMetaDataAnnotation(&volumeClone.ObjectMeta, FirstMarkTime, firstMarkTime.String())
-		}
-	} else {
-		// unmark PV
-		_, ok := volumeClone.ObjectMeta.Annotations[ann]
-		if !ok {
-			glog.V(10).Infof("PV: %s is not marked with ann: %s", volumeClone.Name, ann)
-			return nil
-		}
-		delete(volumeClone.ObjectMeta.Annotations, ann)
-		var hasOtherMarkKeys bool
-		for _, key := range PVUnhealthyKeys {
-			if _, ok = volumeClone.ObjectMeta.Annotations[key]; ok {
-				hasOtherMarkKeys = true
-				break
-			}
-		}
-		if !hasOtherMarkKeys {
-			delete(volumeClone.ObjectMeta.Annotations, FirstMarkTime)
-		}
-
+	// mark PV
+	_, ok := volumeClone.ObjectMeta.Annotations[ann]
+	if ok {
+		glog.V(10).Infof("PV: %s is already marked with ann: %s", volumeClone.Name, ann)
+		return nil
+	}
+	metav1.SetMetaDataAnnotation(&volumeClone.ObjectMeta, ann, value)
+	_, ok = volumeClone.ObjectMeta.Annotations[FirstMarkTime]
+	if !ok {
+		firstMarkTime := time.Now()
+		metav1.SetMetaDataAnnotation(&volumeClone.ObjectMeta, FirstMarkTime, firstMarkTime.String())
 	}
 
 	var err error
@@ -486,23 +478,15 @@ func (monitor *LocalPVMonitor) markOrUnmarkPV(pv *v1.PersistentVolume, ann, valu
 		}
 		monitor.localVolumeMap.UpdateLocalVolume(newVol)
 		glog.V(4).Infof("updating PersistentVolume[%s] successfully", newVol.Name)
-		if mark {
-			eventMes = "Mark PV successfully with annotation key: " + ann
-			monitor.Recorder.Event(pv, v1.EventTypeNormal, MarkPVSucceeded, eventMes)
-		} else {
-			eventMes = "UnMark PV successfully, removed annotation key: " + ann
-			monitor.Recorder.Event(pv, v1.EventTypeNormal, UnMarkPVSucceeded, "UnMark PV successfully")
-		}
+		eventMes = "Mark PV successfully with annotation key: " + ann
+		monitor.Recorder.Event(pv, v1.EventTypeNormal, MarkPVSucceeded, eventMes)
+
 		time.Sleep(UpdatePVInterval)
 		return nil
 	}
 
-	if mark {
-		eventMes = "Failed to Mark PV with annotation key: " + ann
-		monitor.Recorder.Event(pv, v1.EventTypeWarning, MarkPVFailed, "Failed to Mark PV")
-	} else {
-		eventMes = "Failed to UnMark PV, attempt to remove annotation key: " + ann
-		monitor.Recorder.Event(pv, v1.EventTypeWarning, UnMarkPVFailed, "Failed to UnMark PV")
-	}
+	eventMes = "Failed to Mark PV with annotation key: " + ann
+	monitor.Recorder.Event(pv, v1.EventTypeWarning, MarkPVFailed, "Failed to Mark PV")
+
 	return err
 }

@@ -57,6 +57,7 @@ func Run(mo *monitorOpt, stopCh <-chan struct{}) {
 	if len(mo.kube_storage_types) == 0 {
 		glog.Fatalf("kube-storage-types must be set")
 	}
+	// TODO(@NickrenREN): need to handle this more elegantly
 	// check if we support the storage types
 	err := checkStorageTypes(mo.kube_storage_types)
 	if err != nil {
