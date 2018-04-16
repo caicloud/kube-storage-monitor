@@ -42,10 +42,8 @@ const (
 
 // marking event related const vars
 const (
-	MarkPVFailed      = "MarkPVFailed"
-	UnMarkPVFailed    = "UnMarkPVFailed"
-	MarkPVSucceeded   = "MarkPVSucceeded"
-	UnMarkPVSucceeded = "UnMarkPVSucceeded"
+	MarkPVFailed    = "MarkPVFailed"
+	MarkPVSucceeded = "MarkPVSucceeded"
 
 	HostPathNotExist  = "HostPathNotExist"
 	MisMatchedVolSize = "MisMatchedVolSize"
@@ -256,14 +254,12 @@ func (monitor *LocalPVMonitor) checkStatus(pv *v1.PersistentVolume) {
 	}
 
 	// check PV size: PV capacity must not be greater than device capacity and PV used bytes must not be greater that PV capacity
-	dir, _ := monitor.VolUtil.IsDir(mountPath)
-	if dir {
+	if pv.Spec.VolumeMode != nil && *pv.Spec.VolumeMode == v1.PersistentVolumeBlock {
+		monitor.checkPVAndBlockSize(mountPath, pv)
+	} else {
 		monitor.checkPVAndFSSize(mountPath, pv)
 	}
-	bl, _ := monitor.VolUtil.IsBlock(mountPath)
-	if bl {
-		monitor.checkPVAndBlockSize(mountPath, pv)
-	}
+
 }
 
 func (monitor *LocalPVMonitor) checkMountPoint(mountPath string, pv *v1.PersistentVolume) bool {
@@ -332,10 +328,11 @@ func (monitor *LocalPVMonitor) checkPVAndFSSize(mountPath string, pv *v1.Persist
 		glog.Errorf("Path %q fs stats error: %v", mountPath, err)
 		return
 	}
-	// actually if PV is provisioned by provisioner, the two values must be equal, but the PV may be
+	// actually if PV is provisioned dynamically by provisioner, the two values must be equal, but the PV may be
 	// created manually, so the PV capacity must not be greater than FS capacity
 	storage := pv.Spec.Capacity[v1.ResourceStorage]
-	if util.RoundDownCapacityPretty(capacityByte) < storage.Value() {
+	if storage.Value() > util.RoundDownCapacityPretty(capacityByte) {
+		glog.Errorf("PV capacity must not be greater that FS capacity, PV capacity: %v, FS capacity: %v", storage.Value(), util.RoundDownCapacityPretty(capacityByte))
 		// mark PV and send a event
 		err = monitor.markPV(pv, MisMatchedVolSize, "yes")
 		if err != nil {
@@ -343,10 +340,21 @@ func (monitor *LocalPVMonitor) checkPVAndFSSize(mountPath string, pv *v1.Persist
 		}
 		return
 	}
-	// TODO: make sure that PV used bytes is not greater that PV capacity ?
-
-	return
-
+	// make sure that PV usage is not greater than PV capacity
+	usage, err := util.GetDirUsageByte(mountPath)
+	if err != nil {
+		glog.Errorf("Path %q fs stats error: %v", mountPath, err)
+		return
+	}
+	if usage.Value() > storage.Value() {
+		glog.Errorf("PV usage must not be greater than PV capacity, usage: %v, capacity: %v", usage.Value(), storage.Value())
+		// mark PV and send a event
+		err = monitor.markPV(pv, MisMatchedVolSize, "yes")
+		if err != nil {
+			glog.Errorf("mark PV: %s failed, err: %v", pv.Name, err)
+		}
+		return
+	}
 }
 
 func (monitor *LocalPVMonitor) checkPVAndBlockSize(mountPath string, pv *v1.PersistentVolume) {
@@ -355,10 +363,11 @@ func (monitor *LocalPVMonitor) checkPVAndBlockSize(mountPath string, pv *v1.Pers
 		glog.Errorf("Path %q block stats error: %v", mountPath, err)
 		return
 	}
-	// actually if PV is provisioned by provisioner, the two values must be equal, but the PV may be
+	// actually if PV is provisioned dynamically by provisioner, the two values must be equal, but the PV may be
 	// created manually, so the PV capacity must not be greater than block device capacity
 	storage := pv.Spec.Capacity[v1.ResourceStorage]
-	if util.RoundDownCapacityPretty(capacityByte) < storage.Value() {
+	if storage.Value() > util.RoundDownCapacityPretty(capacityByte) {
+		glog.Errorf("PV capacity must not be greater that FS capacity, PV capacity: %v, FS capacity: %v", storage.Value(), util.RoundDownCapacityPretty(capacityByte))
 		// mark PV and send a event
 		err = monitor.markPV(pv, MisMatchedVolSize, "yes")
 		if err != nil {
@@ -366,7 +375,9 @@ func (monitor *LocalPVMonitor) checkPVAndBlockSize(mountPath string, pv *v1.Pers
 		}
 		return
 	}
-	// TODO: make sure that PV used bytes is not greater that PV capacity ?
+
+	// make sure that PV usage is not greater than PV capacity
+	// we can not get raw block device usage for now, so skip this check
 
 	return
 }
