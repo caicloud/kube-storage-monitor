@@ -33,7 +33,7 @@ spec:
               name: provisioner-config
               readOnly: true             
             - mountPath:  /mnt/disks/vol 
-              name: fast-disks 
+              name: local-disks 
           args:
             - --kube-storage-types=local_pv
       volumes:
@@ -42,8 +42,8 @@ spec:
             name: local-monitor-config 
         - name: provisioner-config
           configMap:
-            name: local-monitor-config 			
-        - name: fast-disks
+            name: local-provisioner-config 			
+        - name: local-disks
           hostPath:
             path: /mnt/disks/vol 
 
