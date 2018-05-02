@@ -3,12 +3,6 @@
 
 [[projects]]
   branch = "master"
-  name = "github.com/NickrenREN/kubemonitor"
-  packages = ["pkg/util"]
-  revision = "aea36f3dd3c889b5447ca38987f5e1f2cc59fe6c"
-
-[[projects]]
-  branch = "master"
   name = "github.com/beorn7/perks"
   packages = ["quantile"]
   revision = "3a771d992973f24aa725d07868b467d1ddfceafb"
@@ -22,11 +16,10 @@
 [[projects]]
   name = "github.com/docker/distribution"
   packages = [
-    "digest",
+    "digestset",
     "reference"
   ]
-  revision = "48294d928ced5dd9b378f7fd7c6f5da3ff3f2c89"
-  version = "v2.6.2"
+  revision = "edc3ab29cdff8694dd6feb85cfeb4b5f1b38ed9c"
 
 [[projects]]
   name = "github.com/ghodss/yaml"
@@ -144,6 +137,12 @@
   packages = ["."]
   revision = "1df9eeb2bb81f327b96228865c5687bc2194af3f"
   version = "1.0.0"
+
+[[projects]]
+  name = "github.com/opencontainers/go-digest"
+  packages = ["."]
+  revision = "279bed98673dd5bef374d3b6e4b09e2af76183bf"
+  version = "v1.0.0-rc1"
 
 [[projects]]
   name = "github.com/prometheus/client_golang"
@@ -555,6 +554,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "5c644d73d97cf43aed2e49570a64e32b48519b1364eb8a566c5ff9dab89078b9"
+  inputs-digest = "d064f632ebc2de07c78e1f01f04338313b08067f1525b8fdbeb4c2f45bdc1086"
   solver-name = "gps-cdcl"
   solver-version = 1
