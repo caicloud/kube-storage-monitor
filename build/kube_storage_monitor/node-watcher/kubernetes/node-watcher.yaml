@@ -1,0 +1,24 @@
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: node-watcher
+  namespace: default
+  labels:
+    app: node-watcher
+spec:
+  selector:
+    matchLabels:
+      app: node-watcher
+  template:
+    metadata:
+      labels:
+        app: node-watcher
+    spec:
+      serviceAccountName: node-watcher-admin
+      containers:
+        - image: "quay.io/kube_storage_monitor/storage-monitor:latest"
+          imagePullPolicy: "IfNotPresent"
+          name: watcher
+          args:
+            - --enable-node-watcher=true
+
