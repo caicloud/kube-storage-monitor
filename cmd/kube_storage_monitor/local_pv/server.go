@@ -3,6 +3,7 @@ package local_pv
 import (
 	"os"
 
+	nfc "github.com/caicloud/kube-storage-monitor/pkg/controller/node_failure_controller"
 	lvmonitor "github.com/caicloud/kube-storage-monitor/pkg/local_pv_monitor"
 	"github.com/golang/glog"
 	"github.com/kubernetes-incubator/external-storage/local-volume/provisioner/pkg/common"
@@ -31,6 +32,12 @@ func initConfig() {
 	}
 
 	glog.Infof("Configuration parsing has been completed, ready to run...")
+}
+
+func RunNodeWatcher() {
+	client := common.SetupClient()
+
+	nfc.NewNodeWatcher(client).Run(wait.NeverStop)
 }
 
 func RunLocalPVMonitor() {
