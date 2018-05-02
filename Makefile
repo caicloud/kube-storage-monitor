@@ -31,8 +31,8 @@ container: build quick-container
 .PHONY: container
 
 quick-container:
-	cp storage-monitor build/kube_storage_monitor/docker
-	docker build -t $(MUTABLE_IMAGE) build/kube_storage_monitor/docker
+	cp storage-monitor build/kube_storage_monitor/local_monitor/docker
+	docker build -t $(MUTABLE_IMAGE) build/kube_storage_monitor/local_monitor/docker
 	docker tag $(MUTABLE_IMAGE) $(IMAGE)
 .PHONY: quick-container
 
@@ -47,6 +47,6 @@ test:
 
 clean:
 	rm -f storage-monitor
-	rm -f build/kube_storage_monitor/docker/storage-monitor
+	rm -f build/kube_storage_monitor/local_monitor/docker/storage-monitor
 .PHONY: clean
 
