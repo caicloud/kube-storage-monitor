@@ -22,44 +22,18 @@ import (
 	v1core "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/record"
-	"k8s.io/kubernetes/pkg/apis/core/v1/helper"
+
 	"k8s.io/kubernetes/pkg/util/mount"
 )
 
-const (
-	// DefaultInformerResyncPeriod is the resync period of informer
-	DefaultInformerResyncPeriod = 15 * time.Second
-
-	// DefaultMonitorResyncPeriod is the resync period of monitor
-	DefaultMonitorResyncPeriod = 1 * time.Minute
-
-	// UpdatePVRetryCount is the retry count of PV updating
-	UpdatePVRetryCount = 5
-
-	// UpdatePVInterval is the interval of PV updating
-	UpdatePVInterval = 5 * time.Millisecond
-)
-
-// marking event related const vars
-const (
-	MarkPVFailed    = "MarkPVFailed"
-	MarkPVSucceeded = "MarkPVSucceeded"
-
-	HostPathNotExist  = "HostPathNotExist"
-	MisMatchedVolSize = "MisMatchedVolSize"
-	NotMountPoint     = "NotMountPoint"
-
-	FirstMarkTime = "FirstMarkTime"
-)
-
 // PVUnhealthyKeys stores all the unhealthy marking keys
-var PVUnhealthyKeys []string
+/*var PVUnhealthyKeys []string
 
 func init() {
-	PVUnhealthyKeys = append(PVUnhealthyKeys, HostPathNotExist)
-	PVUnhealthyKeys = append(PVUnhealthyKeys, MisMatchedVolSize)
-	PVUnhealthyKeys = append(PVUnhealthyKeys, NotMountPoint)
-}
+	PVUnhealthyKeys = append(PVUnhealthyKeys, util.HostPathNotExist)
+	PVUnhealthyKeys = append(PVUnhealthyKeys, util.MisMatchedVolSize)
+	PVUnhealthyKeys = append(PVUnhealthyKeys, util.NotMountPoint)
+}*/
 
 // Monitor checks PVs' health condition and taint them if they are unhealthy
 type LocalPVMonitor struct {
@@ -71,7 +45,7 @@ type LocalPVMonitor struct {
 	volumeLW         cache.ListerWatcher
 	volumeController cache.Controller
 
-	localVolumeMap LocalVolumeMap
+	localVolumeMap util.VolumeMap
 
 	hasRun     bool
 	hasRunLock *sync.Mutex
@@ -112,7 +86,7 @@ func NewLocalPVMonitor(client *kubernetes.Clientset, config *common.UserConfig, 
 		labelOps.LabelSelector = monitor.config.LabelSelectorForPV
 	}
 
-	monitor.localVolumeMap = NewLocalVolumeMap()
+	monitor.localVolumeMap = util.NewVolumeMap()
 
 	monitor.volumeLW = &cache.ListWatch{
 		ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
@@ -125,7 +99,7 @@ func NewLocalPVMonitor(client *kubernetes.Clientset, config *common.UserConfig, 
 	_, monitor.volumeController = cache.NewInformer(
 		monitor.volumeLW,
 		&v1.PersistentVolume{},
-		DefaultInformerResyncPeriod,
+		util.DefaultInformerResyncPeriod,
 		cache.ResourceEventHandlerFuncs{
 			AddFunc:    monitor.addVolume,
 			UpdateFunc: monitor.updateVolume,
@@ -151,7 +125,10 @@ func (monitor *LocalPVMonitor) flushFromETCDFirst() error {
 	}
 
 	for _, pv := range pvs.Items {
-		monitor.localVolumeMap.AddLocalVolume(&pv)
+		// only add local volumes
+		if pv.Spec.Local != nil {
+			monitor.localVolumeMap.AddUpdateVolume(&pv)
+		}
 	}
 	return nil
 }
@@ -163,8 +140,10 @@ func (monitor *LocalPVMonitor) addVolume(obj interface{}) {
 		return
 	}
 
-	monitor.localVolumeMap.AddLocalVolume(volume)
-
+	// only add local volumes
+	if volume.Spec.Local != nil {
+		monitor.localVolumeMap.AddUpdateVolume(volume)
+	}
 }
 
 func (monitor *LocalPVMonitor) updateVolume(oldObj, newObj interface{}) {
@@ -174,7 +153,10 @@ func (monitor *LocalPVMonitor) updateVolume(oldObj, newObj interface{}) {
 		return
 	}
 
-	monitor.localVolumeMap.UpdateLocalVolume(newVolume)
+	// only add local volumes
+	if newVolume.Spec.Local != nil {
+		monitor.localVolumeMap.AddUpdateVolume(newVolume)
+	}
 }
 
 func (monitor *LocalPVMonitor) deleteVolume(obj interface{}) {
@@ -184,7 +166,7 @@ func (monitor *LocalPVMonitor) deleteVolume(obj interface{}) {
 		return
 	}
 
-	monitor.localVolumeMap.DeleteLocalVolume(volume)
+	monitor.localVolumeMap.DeleteVolume(volume)
 
 }
 
@@ -217,7 +199,7 @@ func (monitor *LocalPVMonitor) MonitorLocalVolumes() {
 			}
 		}
 
-		time.Sleep(DefaultMonitorResyncPeriod)
+		time.Sleep(util.DefaultResyncPeriod)
 	}
 }
 
@@ -229,7 +211,7 @@ func (monitor *LocalPVMonitor) checkStatus(pv *v1.PersistentVolume) {
 		return
 	}
 	// check node and pv affinity
-	fit, err := CheckNodeAffinity(pv, monitor.Node.Labels)
+	fit, err := util.CheckNodeAffinity(pv, monitor.Node.Labels)
 	if err != nil {
 		glog.Errorf("check node affinity error: %v", err)
 		return
@@ -278,7 +260,7 @@ func (monitor *LocalPVMonitor) checkMountPoint(mountPath string, pv *v1.Persiste
 	}
 
 	glog.V(6).Infof("mountPath is not a mount point any more: %s", mountPath)
-	err := monitor.markPV(pv, NotMountPoint, "yes")
+	err := util.MarkPV(monitor.Client, monitor.Recorder, pv, util.NotMountPoint, "yes", monitor.localVolumeMap)
 	if err != nil {
 		glog.Errorf("mark PV: %s failed, err: %v", pv.Name, err)
 	}
@@ -300,7 +282,7 @@ func (monitor *LocalPVMonitor) checkHostDir(pv *v1.PersistentVolume) (mountPath 
 	if len(mountPath) == 0 {
 		// can not find mount path, this may because: admin modify config(hostpath)
 		// mark PV and send a event
-		err = monitor.markPV(pv, HostPathNotExist, "yes")
+		err = util.MarkPV(monitor.Client, monitor.Recorder, pv, util.HostPathNotExist, "yes", monitor.localVolumeMap)
 		if err != nil {
 			glog.Errorf("mark PV: %s failed, err: %v", pv.Name, err)
 		}
@@ -311,7 +293,7 @@ func (monitor *LocalPVMonitor) checkHostDir(pv *v1.PersistentVolume) (mountPath 
 	if !dir && !bl && (dirErr != nil || blErr != nil) {
 		// mountPath does not exist or is not a directory
 		// mark PV and send a event
-		err = monitor.markPV(pv, HostPathNotExist, "yes")
+		err = util.MarkPV(monitor.Client, monitor.Recorder, pv, util.HostPathNotExist, "yes", monitor.localVolumeMap)
 		if err != nil {
 			glog.Errorf("mark PV: %s failed, err: %v", pv.Name, err)
 		}
@@ -334,7 +316,7 @@ func (monitor *LocalPVMonitor) checkPVAndFSSize(mountPath string, pv *v1.Persist
 	if storage.Value() > util.RoundDownCapacityPretty(capacityByte) {
 		glog.Errorf("PV capacity must not be greater that FS capacity, PV capacity: %v, FS capacity: %v", storage.Value(), util.RoundDownCapacityPretty(capacityByte))
 		// mark PV and send a event
-		err = monitor.markPV(pv, MisMatchedVolSize, "yes")
+		err = util.MarkPV(monitor.Client, monitor.Recorder, pv, util.MisMatchedVolSize, "yes", monitor.localVolumeMap)
 		if err != nil {
 			glog.Errorf("mark PV: %s failed, err: %v", pv.Name, err)
 		}
@@ -349,7 +331,7 @@ func (monitor *LocalPVMonitor) checkPVAndFSSize(mountPath string, pv *v1.Persist
 	if usage.Value() > storage.Value() {
 		glog.Errorf("PV usage must not be greater than PV capacity, usage: %v, capacity: %v", usage.Value(), storage.Value())
 		// mark PV and send a event
-		err = monitor.markPV(pv, MisMatchedVolSize, "yes")
+		err = util.MarkPV(monitor.Client, monitor.Recorder, pv, util.MisMatchedVolSize, "yes", monitor.localVolumeMap)
 		if err != nil {
 			glog.Errorf("mark PV: %s failed, err: %v", pv.Name, err)
 		}
@@ -369,7 +351,7 @@ func (monitor *LocalPVMonitor) checkPVAndBlockSize(mountPath string, pv *v1.Pers
 	if storage.Value() > util.RoundDownCapacityPretty(capacityByte) {
 		glog.Errorf("PV capacity must not be greater that FS capacity, PV capacity: %v, FS capacity: %v", storage.Value(), util.RoundDownCapacityPretty(capacityByte))
 		// mark PV and send a event
-		err = monitor.markPV(pv, MisMatchedVolSize, "yes")
+		err = util.MarkPV(monitor.Client, monitor.Recorder, pv, util.MisMatchedVolSize, "yes", monitor.localVolumeMap)
 		if err != nil {
 			glog.Errorf("mark PV: %s failed, err: %v", pv.Name, err)
 		}
@@ -380,108 +362,4 @@ func (monitor *LocalPVMonitor) checkPVAndBlockSize(mountPath string, pv *v1.Pers
 	// we can not get raw block device usage for now, so skip this check
 
 	return
-}
-
-// CheckNodeAffinity looks at the PV node affinity, and checks if the node has the same corresponding labels
-// This ensures that we don't mount a volume that doesn't belong to this node
-func CheckNodeAffinity(pv *v1.PersistentVolume, nodeLabels map[string]string) (bool, error) {
-	fit, err := checkAlphaNodeAffinity(pv, nodeLabels)
-	if err != nil {
-		return false, err
-	}
-	if fit {
-		return true, nil
-	}
-	return checkVolumeNodeAffinity(pv, nodeLabels)
-}
-
-func checkAlphaNodeAffinity(pv *v1.PersistentVolume, nodeLabels map[string]string) (bool, error) {
-	affinity, err := helper.GetStorageNodeAffinityFromAnnotation(pv.Annotations)
-	if err != nil {
-		return false, fmt.Errorf("error getting storage node affinity: %v", err)
-	}
-	if affinity == nil {
-		return false, nil
-	}
-
-	if affinity.RequiredDuringSchedulingIgnoredDuringExecution != nil {
-		terms := affinity.RequiredDuringSchedulingIgnoredDuringExecution.NodeSelectorTerms
-		glog.V(10).Infof("Match for RequiredDuringSchedulingIgnoredDuringExecution node selector terms %+v", terms)
-		for _, term := range terms {
-			selector, err := helper.NodeSelectorRequirementsAsSelector(term.MatchExpressions)
-			if err != nil {
-				return false, fmt.Errorf("failed to parse MatchExpressions: %v", err)
-			}
-			if !selector.Matches(labels.Set(nodeLabels)) {
-				return false, fmt.Errorf("NodeSelectorTerm %+v does not match node labels", term.MatchExpressions)
-			}
-		}
-	}
-	return true, nil
-}
-
-func checkVolumeNodeAffinity(pv *v1.PersistentVolume, nodeLabels map[string]string) (bool, error) {
-	if pv.Spec.NodeAffinity == nil {
-		return false, nil
-	}
-
-	if pv.Spec.NodeAffinity.Required != nil {
-		terms := pv.Spec.NodeAffinity.Required.NodeSelectorTerms
-		glog.V(10).Infof("Match for Required node selector terms %+v", terms)
-		for _, term := range terms {
-			selector, err := helper.NodeSelectorRequirementsAsSelector(term.MatchExpressions)
-			if err != nil {
-				return false, fmt.Errorf("failed to parse MatchExpressions: %v", err)
-			}
-			if !selector.Matches(labels.Set(nodeLabels)) {
-				return false, fmt.Errorf("NodeSelectorTerm %+v does not match node labels", term.MatchExpressions)
-			}
-		}
-	}
-	return true, nil
-}
-
-// markPV marks PV by adding annotation
-func (monitor *LocalPVMonitor) markPV(pv *v1.PersistentVolume, ann, value string) error {
-	// The volume from method args can be pointing to watcher cache. We must not
-	// modify these, therefore create a copy.
-	volumeClone := pv.DeepCopy()
-	var eventMes string
-
-	// mark PV
-	_, ok := volumeClone.ObjectMeta.Annotations[ann]
-	if ok {
-		glog.V(10).Infof("PV: %s is already marked with ann: %s", volumeClone.Name, ann)
-		return nil
-	}
-	metav1.SetMetaDataAnnotation(&volumeClone.ObjectMeta, ann, value)
-	_, ok = volumeClone.ObjectMeta.Annotations[FirstMarkTime]
-	if !ok {
-		firstMarkTime := time.Now()
-		metav1.SetMetaDataAnnotation(&volumeClone.ObjectMeta, FirstMarkTime, firstMarkTime.String())
-	}
-
-	var err error
-	var newVol *v1.PersistentVolume
-	// Try to update the PV object several times
-	for i := 0; i < UpdatePVRetryCount; i++ {
-		glog.V(4).Infof("try to update PV: %s", pv.Name)
-		newVol, err = monitor.Client.CoreV1().PersistentVolumes().Update(volumeClone)
-		if err != nil {
-			glog.V(4).Infof("updating PersistentVolume[%s] failed: %v", volumeClone.Name, err)
-			time.Sleep(UpdatePVInterval)
-			continue
-		}
-		monitor.localVolumeMap.UpdateLocalVolume(newVol)
-		glog.V(4).Infof("updating PersistentVolume[%s] successfully", newVol.Name)
-		eventMes = "Mark PV successfully with annotation key: " + ann
-		monitor.Recorder.Event(pv, v1.EventTypeNormal, MarkPVSucceeded, eventMes)
-
-		return nil
-	}
-
-	eventMes = "Failed to Mark PV with annotation key: " + ann
-	monitor.Recorder.Event(pv, v1.EventTypeWarning, MarkPVFailed, "Failed to Mark PV")
-
-	return err
 }
