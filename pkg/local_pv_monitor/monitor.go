@@ -469,6 +469,7 @@ func (monitor *LocalPVMonitor) markPV(pv *v1.PersistentVolume, ann, value string
 		newVol, err = monitor.Client.CoreV1().PersistentVolumes().Update(volumeClone)
 		if err != nil {
 			glog.V(4).Infof("updating PersistentVolume[%s] failed: %v", volumeClone.Name, err)
+			time.Sleep(UpdatePVInterval)
 			continue
 		}
 		monitor.localVolumeMap.UpdateLocalVolume(newVol)
@@ -476,7 +477,6 @@ func (monitor *LocalPVMonitor) markPV(pv *v1.PersistentVolume, ann, value string
 		eventMes = "Mark PV successfully with annotation key: " + ann
 		monitor.Recorder.Event(pv, v1.EventTypeNormal, MarkPVSucceeded, eventMes)
 
-		time.Sleep(UpdatePVInterval)
 		return nil
 	}
 

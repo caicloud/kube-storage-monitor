@@ -14,12 +14,15 @@ import (
 )
 
 type monitorOpt struct {
-	kube_storage_types []string
+	kube_storage_types  []string
+	enable_node_watcher bool
 }
 
 func (mo *monitorOpt) AddFlags(fs *pflag.FlagSet) {
 	fs.StringSliceVar(&mo.kube_storage_types, "kube-storage-types", mo.kube_storage_types, ""+
 		"kube-storage-types is the backend storage drivers type, such as: local_pv, cephfs, rbd... ")
+	fs.BoolVar(&mo.enable_node_watcher, "enable-node-watcher", mo.enable_node_watcher, ""+
+		"enable-node-watcher shows whether we need to watch node events")
 }
 
 // NewMonitorServerCommand creates a *cobra.Command object with default parameters
@@ -38,25 +41,30 @@ func NewMonitorServerCommand() *cobra.Command {
 }
 
 func Run(mo *monitorOpt, stopCh <-chan struct{}) {
-	if len(mo.kube_storage_types) == 0 {
-		glog.Fatalf("kube-storage-types must be set")
+	if len(mo.kube_storage_types) == 0 && !mo.enable_node_watcher {
+		glog.Fatalf("either kube-storage-types or enable-node-watcher must be set")
 	}
-	// TODO(@NickrenREN): need to handle this more elegantly
-	// check if we support the storage types
-	err := checkStorageTypes(mo.kube_storage_types)
-	if err != nil {
-		glog.Errorf("check storage types error: %v", err)
-		os.Exit(1)
-	}
-	// run specific storage monitor
-	for _, sType := range mo.kube_storage_types {
-		switch sType {
-		// Add local_pv support at first
-		// If we get to support other storage types, need to add here
-		case "local_pv":
-			go local_pv.RunLocalPVMonitor()
+	if len(mo.kube_storage_types) > 0 {
+		// TODO(@NickrenREN): need to handle this more elegantly
+		// check if we support the storage types
+		err := checkStorageTypes(mo.kube_storage_types)
+		if err != nil {
+			glog.Errorf("check storage types error: %v", err)
+			os.Exit(1)
 		}
+		// run specific storage monitor
+		for _, sType := range mo.kube_storage_types {
+			switch sType {
+			// Add local_pv support at first
+			// If we get to support other storage types, need to add here
+			case "local_pv":
+				go local_pv.RunLocalPVMonitor()
+			}
+		}
+	} else {
+		go local_pv.RunNodeWatcher()
 	}
+
 	<-stopCh
 }
 

@@ -50,7 +50,7 @@ Also see [known issues](KNOWN_ISSUES.md) and [CHANGELOG](CHANGELOG.md).
 
 * New PV.NodeAffinity field added.
 * **Important:** Alpha PV NodeAffinity annotation is deprecated. Users must manually update
-  their PVs to use the new NodeAffinity field or run a one-time update job (TBD).
+  their PVs to use the new NodeAffinity field or run a [one-time update job](utils/update-pv-to-beta).
 * Alpha: Raw block support added.
 
 ### 1.9: Alpha
@@ -87,6 +87,10 @@ If raw local block feature is needed,
 ```
 $ export KUBE_FEATURE_GATES="BlockVolume=true"
 ```
+
+Note: Kubernetes versions prior to 1.10 require [several additional
+feature-gates](https://github.com/kubernetes-incubator/external-storage/tree/local-volume-provisioner-v2.0.0/local-volume#enabling-the-alpha-feature-gates) 
+be enabled on all Kubernetes components, because the persistent lcoal volumes and other features were in alpha.
 
 #### Option 1: GCE
 
@@ -269,9 +273,21 @@ go run hack/e2e.go -- -v --test --test_args="--ginkgo.focus=PersistentVolumes-lo
 ```
 
 ### View CI Results
-[GCE Alpha](https://k8s-testgrid.appspot.com/sig-storage#gce-alpha)
+[GCE](https://k8s-testgrid.appspot.com/sig-storage#gce&include-filter-by-regex=PersistentVolumes-local)
 
-[GKE Alpha](https://k8s-testgrid.appspot.com/sig-storage#gke-alpha)
+[GKE](https://k8s-testgrid.appspot.com/sig-storage#gke&include-filter-by-regex=PersistentVolumes-local)
+
+[GCE Slow](https://k8s-testgrid.appspot.com/sig-storage#gce-slow&include-filter-by-regex=PersistentVolumes-local)
+
+[GKE Slow](https://k8s-testgrid.appspot.com/sig-storage#gke-slow&include-filter-by-regex=PersistentVolumes-local)
+
+[GCE Serial](https://k8s-testgrid.appspot.com/sig-storage#gce-serial&include-filter-by-regex=PersistentVolumes-local)
+
+[GKE Serial](https://k8s-testgrid.appspot.com/sig-storage#gke-serial&include-filter-by-regex=PersistentVolumes-local)
+
+[GCE Alpha](https://k8s-testgrid.appspot.com/sig-storage#gce-alpha&include-filter-by-regex=PersistentVolumes-local)
+
+[GKE Alpha](https://k8s-testgrid.appspot.com/sig-storage#gke-alpha&include-filter-by-regex=PersistentVolumes-local)
 
 
 ## Best Practices
