@@ -6,7 +6,7 @@ import (
 
 	"github.com/golang/glog"
 
-	"github.com/caicloud/kube-storage-monitor/pkg/local_pv_monitor"
+	"github.com/caicloud/kube-storage-monitor/pkg/util"
 
 	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -23,22 +23,6 @@ import (
 	"k8s.io/client-go/util/workqueue"
 
 	"k8s.io/kubernetes/pkg/controller"
-)
-
-const (
-	// DefaultInformerResyncPeriod is the resync period of informer
-	DefaultInformerResyncPeriod = 3 * time.Second
-
-	// DefaultWatcherResyncPeriod is the resync period of node watcher
-	DefaultWatcherResyncPeriod = 5 * time.Second
-
-	// DefaultNodeNotReadyTimeDuration is the default time interval we need to consider node broken if it keeps NotReady
-	DefaultNodeNotReadyTimeDuration = 120 * time.Second
-)
-
-// marking event related const vars
-const (
-	NodeFailure = "NodeFailure"
 )
 
 // NodeWatcher watches nodes conditions
@@ -76,7 +60,7 @@ func NewNodeWatcher(client *kubernetes.Clientset) *NodeWatcher {
 	}
 	watcher.nodeMap = NewNodeMap()
 
-	informerFactory := informers.NewSharedInformerFactory(client, DefaultInformerResyncPeriod)
+	informerFactory := informers.NewSharedInformerFactory(client, util.DefaultInformerResyncPeriod)
 	nodeInformer := informerFactory.Core().V1().Nodes()
 	nodeInformer.Informer().AddEventHandler(
 		cache.ResourceEventHandlerFuncs{
@@ -167,8 +151,8 @@ func (watcher *NodeWatcher) Run(stopCh <-chan struct{}) {
 	}
 
 	//go watcher.WatchNodes()
-	go wait.Until(watcher.resync, DefaultWatcherResyncPeriod, stopCh)
-	go wait.Until(watcher.WatchNodes, DefaultInformerResyncPeriod, stopCh)
+	go wait.Until(watcher.resync, util.DefaultResyncPeriod, stopCh)
+	go wait.Until(watcher.WatchNodes, util.DefaultResyncPeriod, stopCh)
 	<-stopCh
 }
 
@@ -229,11 +213,11 @@ func (watcher *NodeWatcher) updateNode(key string, node *v1.Node) {
 		// mark all local PVs on this node
 		// try several times again
 		var err error
-		for i := 0; i < local_pv_monitor.UpdatePVRetryCount; i++ {
-			err = watcher.markLocalPVsOnNode(node, NodeFailure, "true")
+		for i := 0; i < util.UpdatePVRetryCount; i++ {
+			err = watcher.markLocalPVsOnNode(node, util.NodeFailure, "true")
 			if err != nil {
 				glog.V(4).Infof("marking local PVs failed: %v", err)
-				time.Sleep(local_pv_monitor.UpdatePVInterval)
+				time.Sleep(util.UpdatePVInterval)
 				continue
 			}
 			break
@@ -279,7 +263,7 @@ func (watcher *NodeWatcher) isNodeBroken(node *v1.Node) bool {
 			firstMarkTime, ok := watcher.nodeFirstBrokenMap[objName]
 			if ok {
 				timeInterval := now.Sub(firstMarkTime)
-				if timeInterval.Seconds() > DefaultNodeNotReadyTimeDuration.Seconds() {
+				if timeInterval.Seconds() > util.DefaultNodeNotReadyTimeDuration.Seconds() {
 					return true
 				} else {
 					glog.V(6).Infof("node:%s is not ready, but less than 2 minutes, re-enqueue", node.Name)
@@ -311,11 +295,11 @@ func (watcher *NodeWatcher) deleteNode(key string, node *v1.Node) {
 
 	// mark all local PVs on this node
 	// try several times again
-	for i := 0; i < local_pv_monitor.UpdatePVRetryCount; i++ {
-		err := watcher.markLocalPVsOnNode(node, NodeFailure, "true")
+	for i := 0; i < util.UpdatePVRetryCount; i++ {
+		err := watcher.markLocalPVsOnNode(node, util.NodeFailure, "true")
 		if err != nil {
 			glog.V(4).Infof("marking local PVs failed: %v", err)
-			time.Sleep(local_pv_monitor.UpdatePVInterval)
+			time.Sleep(util.UpdatePVInterval)
 			continue
 		}
 		return
@@ -339,7 +323,7 @@ func (watcher *NodeWatcher) markLocalPVsOnNode(node *v1.Node, ann, val string) e
 			continue
 		}
 		// check node and pv affinity
-		fit, err := local_pv_monitor.CheckNodeAffinity(pv, node.Labels)
+		fit, err := util.CheckNodeAffinity(pv, node.Labels)
 		if err != nil {
 			glog.Errorf("check node affinity error: %v", err)
 			return err
@@ -349,7 +333,7 @@ func (watcher *NodeWatcher) markLocalPVsOnNode(node *v1.Node, ann, val string) e
 			continue
 		}
 
-		err = watcher.markPV(pv, ann, val)
+		err = util.MarkPV(watcher.client, watcher.recorder, pv, ann, val, nil)
 		if err != nil {
 			markErrHappened = true
 			glog.Errorf("mark local PV: %s failed, error: %v", pv.Name, err)
@@ -360,47 +344,4 @@ func (watcher *NodeWatcher) markLocalPVsOnNode(node *v1.Node, ann, val string) e
 		return fmt.Errorf("error happened when marking local PVs")
 	}
 	return nil
-}
-
-func (watcher *NodeWatcher) markPV(pv *v1.PersistentVolume, ann, value string) error {
-	// The volume from method args can be pointing to watcher cache. We must not
-	// modify these, therefore create a copy.
-	volumeClone := pv.DeepCopy()
-	var eventMes string
-
-	// mark PV
-	_, ok := volumeClone.ObjectMeta.Annotations[ann]
-	if ok {
-		glog.V(10).Infof("PV: %s is already marked with ann: %s", volumeClone.Name, ann)
-		return nil
-	}
-	metav1.SetMetaDataAnnotation(&volumeClone.ObjectMeta, ann, value)
-	_, ok = volumeClone.ObjectMeta.Annotations[local_pv_monitor.FirstMarkTime]
-	if !ok {
-		firstMarkTime := time.Now()
-		metav1.SetMetaDataAnnotation(&volumeClone.ObjectMeta, local_pv_monitor.FirstMarkTime, firstMarkTime.String())
-	}
-
-	var err error
-	var newVol *v1.PersistentVolume
-	// Try to update the PV object several times
-	for i := 0; i < local_pv_monitor.UpdatePVRetryCount; i++ {
-		glog.V(4).Infof("try to update PV: %s", pv.Name)
-		newVol, err = watcher.client.CoreV1().PersistentVolumes().Update(volumeClone)
-		if err != nil {
-			glog.V(4).Infof("updating PersistentVolume[%s] failed: %v", volumeClone.Name, err)
-			time.Sleep(local_pv_monitor.UpdatePVInterval)
-			continue
-		}
-		glog.V(4).Infof("updating PersistentVolume[%s] successfully", newVol.Name)
-		eventMes = "Mark PV successfully with annotation key: " + ann
-		watcher.recorder.Event(pv, v1.EventTypeNormal, local_pv_monitor.MarkPVSucceeded, eventMes)
-
-		return nil
-	}
-
-	eventMes = "Failed to Mark PV with annotation key: " + ann
-	watcher.recorder.Event(pv, v1.EventTypeWarning, local_pv_monitor.MarkPVFailed, "Failed to Mark PV")
-
-	return err
 }

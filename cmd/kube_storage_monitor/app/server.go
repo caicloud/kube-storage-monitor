@@ -8,20 +8,27 @@ import (
 	"github.com/spf13/pflag"
 
 	"github.com/caicloud/kube-storage-monitor/cmd/kube_storage_monitor/local_pv"
+	"github.com/caicloud/kube-storage-monitor/cmd/kube_storage_monitor/remote_pv"
 
 	"github.com/golang/glog"
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
 type monitorOpt struct {
-	kube_storage_types  []string
-	enable_node_watcher bool
+	kubeStorageTypes  []string
+	enableNodeWatcher bool
+
+	storageDriver           string
+	storageDriverConfigFile string
 }
 
 func (mo *monitorOpt) AddFlags(fs *pflag.FlagSet) {
-	fs.StringSliceVar(&mo.kube_storage_types, "kube-storage-types", mo.kube_storage_types, ""+
+	fs.StringSliceVar(&mo.kubeStorageTypes, "kube-storage-types", mo.kubeStorageTypes, ""+
 		"kube-storage-types is the backend storage drivers type, such as: local_pv, cephfs, rbd... ")
-	fs.BoolVar(&mo.enable_node_watcher, "enable-node-watcher", mo.enable_node_watcher, ""+
+	fs.StringVar(&mo.storageDriver, "storage-driver", mo.storageDriver, "storage driver name")
+	fs.StringVar(&mo.storageDriverConfigFile, "storage-driver-config-file", mo.storageDriverConfigFile, "Path of the storage driver config file")
+
+	fs.BoolVar(&mo.enableNodeWatcher, "enable-node-watcher", mo.enableNodeWatcher, ""+
 		"enable-node-watcher shows whether we need to watch node events")
 }
 
@@ -41,24 +48,24 @@ func NewMonitorServerCommand() *cobra.Command {
 }
 
 func Run(mo *monitorOpt, stopCh <-chan struct{}) {
-	if len(mo.kube_storage_types) == 0 && !mo.enable_node_watcher {
+	if len(mo.kubeStorageTypes) == 0 && !mo.enableNodeWatcher {
 		glog.Fatalf("either kube-storage-types or enable-node-watcher must be set")
 	}
-	if len(mo.kube_storage_types) > 0 {
+	if len(mo.kubeStorageTypes) > 0 {
 		// TODO(@NickrenREN): need to handle this more elegantly
 		// check if we support the storage types
-		err := checkStorageTypes(mo.kube_storage_types)
+		err := checkStorageTypes(mo.kubeStorageTypes)
 		if err != nil {
 			glog.Errorf("check storage types error: %v", err)
 			os.Exit(1)
 		}
 		// run specific storage monitor
-		for _, sType := range mo.kube_storage_types {
+		for _, sType := range mo.kubeStorageTypes {
 			switch sType {
-			// Add local_pv support at first
-			// If we get to support other storage types, need to add here
 			case "local_pv":
 				go local_pv.RunLocalPVMonitor()
+			case "cinder_pv", "hostpath_pv":
+				go remote_pv.RunRemotePVMonitor(mo.storageDriver, mo.storageDriverConfigFile)
 			}
 		}
 	} else {
@@ -69,20 +76,22 @@ func Run(mo *monitorOpt, stopCh <-chan struct{}) {
 }
 
 var (
-	supported_storage_types = map[string]bool{}
+	supportedStorageTypes = map[string]bool{}
 )
 
 // getSupportedStorageTypes returns the supported storage types
 // Add local_pv support at first
 // If we get to support other storage types, need to add here too
 func getSupportedStorageTypes() {
-	supported_storage_types["local_pv"] = true
+	supportedStorageTypes["local_pv"] = true
+	supportedStorageTypes["cinder_pv"] = true
+	supportedStorageTypes["hostpath_pv"] = true
 }
 
 func checkStorageTypes(storageTypes []string) error {
 	getSupportedStorageTypes()
 	for _, sType := range storageTypes {
-		if !supported_storage_types[sType] {
+		if !supportedStorageTypes[sType] {
 			return fmt.Errorf("monitor does not support %s storage type now", sType)
 		}
 	}
